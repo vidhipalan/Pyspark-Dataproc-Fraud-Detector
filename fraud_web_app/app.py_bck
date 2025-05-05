@@ -1,0 +1,57 @@
+# app.py
+
+import findspark
+findspark.init()
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+from pyspark.ml import PipelineModel
+
+import streamlit as st
+
+# 1) Spark setup (local mode)
+spark = (
+    SparkSession
+    .builder
+    .master("local[*]")
+    .appName("FraudDetection")
+    .getOrCreate()
+)
+
+# 2) Load your saved pipeline
+model = PipelineModel.load("gs://fraud_detection_dataset_1/rf_100pct_model")
+
+# 3) Streamlit UI
+st.title("Fraud Detection")
+
+amount            = st.number_input("Amount",            min_value=0.0, format="%.2f")
+oldbalanceOrig    = st.number_input("Old Orig Balance",  min_value=0.0, format="%.2f")
+newbalanceOrig    = st.number_input("New Orig Balance",  min_value=0.0, format="%.2f")
+oldbalanceDest    = st.number_input("Old Dest Balance",  min_value=0.0, format="%.2f")
+newbalanceDest    = st.number_input("New Dest Balance",  min_value=0.0, format="%.2f")
+tx_type           = st.selectbox("Transaction Type", ["PAYMENT","TRANSFER","CASH_OUT","DEBIT","CASH_IN"])
+
+if st.button("Predict"):
+    # build a one-row DataFrame
+    df = spark.createDataFrame(
+        [(amount, oldbalanceOrig, newbalanceOrig,
+          oldbalanceDest, newbalanceDest, tx_type)],
+        ["amount","oldbalanceOrg","newbalanceOrig",
+         "oldbalanceDest","newbalanceDest","type"]
+    ).withColumn(
+        "deltaOrig",           col("oldbalanceOrg")  - col("newbalanceOrig")
+    ).withColumn(
+        "deltaDest",           col("newbalanceDest") - col("oldbalanceDest")
+    ).withColumn(
+        "amount_to_orig_ratio", col("amount")/(col("oldbalanceOrg")+1)
+    ).withColumn(
+        "amount_to_dest_ratio", col("amount")/(col("oldbalanceDest")+1)
+    )
+
+    # run inference
+    prediction = model.transform(df).select("prediction").first()[0]
+
+    if prediction == 1:
+        st.write("⚠️ **This transaction is predicted to be FRAUDULENT.**")
+    else:
+        st.write("✅ **This transaction appears legitimate.**")
